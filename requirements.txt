@@ -2,3 +2,8 @@ openai
 python-dotenv
 rich
 httpx
+jieba
+pytest
+fastapi
+pydantic
+uvicorn
