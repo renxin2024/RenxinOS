@@ -2,10 +2,24 @@
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from scalar_fastapi import get_scalar_api_reference
 
 from src.agent import RETRIEVE_TOP_K, ask_agent_with_meta
 
-app = FastAPI(title="Renxin OS", description="基于个人笔记的 RAG 问答 API", version="0.1.0")
+app = FastAPI(
+    title="Renxin OS",
+    description="基于个人笔记的 RAG 问答 API",
+    version="0.1.0",
+    docs_url=None,
+)
+
+
+@app.get("/scalar", include_in_schema=False)
+async def scalar_html():
+    return get_scalar_api_reference(
+        openapi_url=app.openapi_url,
+        title=app.title,
+    )
 
 
 class ChatRequest(BaseModel):

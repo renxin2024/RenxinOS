@@ -7,3 +7,4 @@ pytest
 fastapi
 pydantic
 uvicorn
+scalar-fastapi

@@ -9,6 +9,13 @@ from src.api import app
 client = TestClient(app)
 
 
+def test_scalar_docs():
+    response = client.get("/scalar")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "Renxin OS" in response.text
+
+
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
