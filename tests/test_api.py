@@ -29,6 +29,12 @@ def test_chat(mock_ask):
         "sources": [
             {"file": "ABC.md", "heading": "4D", "score": 5},
         ],
+        "timings": {
+            "retrieve_ms": 12.3,
+            "prompt_ms": 0.5,
+            "llm_ms": 856.0,
+            "total_ms": 868.8,
+        },
     }
 
     response = client.post("/chat", json={"question": "什么是4D"})
@@ -37,6 +43,9 @@ def test_chat(mock_ask):
     assert "4D" in data["answer"]
     assert len(data["sources"]) == 1
     assert data["sources"][0]["file"] == "ABC.md"
+    assert data["timings"]["retrieve_ms"] == 12.3
+    assert data["timings"]["llm_ms"] == 856.0
+    assert data["timings"]["total_ms"] == 868.8
     mock_ask.assert_called_once_with("什么是4D", top_k=8)
 
 

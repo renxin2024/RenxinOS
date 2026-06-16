@@ -33,9 +33,17 @@ class SourceItem(BaseModel):
     score: int
 
 
+class ChatTimings(BaseModel):
+    retrieve_ms: float = Field(..., description="关键词检索耗时（毫秒）")
+    prompt_ms: float = Field(..., description="拼装 system prompt 耗时（毫秒）")
+    llm_ms: float = Field(..., description="LLM 调用耗时（毫秒）")
+    total_ms: float = Field(..., description="端到端总耗时（毫秒）")
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceItem]
+    timings: ChatTimings
 
 
 @app.get("/health")

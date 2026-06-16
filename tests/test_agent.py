@@ -10,6 +10,7 @@ from src.agent import (
     _format_references,
     _tokenize,
     ask_agent,
+    ask_agent_with_meta,
     load_chunks,
     retrieve,
 )
@@ -87,3 +88,17 @@ class TestAskAgent:
         assert "参考资料" in messages[0]["content"]
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == VALIDATION_QUERY
+
+    @patch("src.agent.client.chat.completions.create")
+    def test_ask_agent_with_meta_includes_stage_timings(self, mock_create):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "测试回答"
+        mock_create.return_value = mock_response
+
+        result = ask_agent_with_meta(VALIDATION_QUERY)
+
+        timings = result["timings"]
+        assert set(timings) == {"retrieve_ms", "prompt_ms", "llm_ms", "total_ms"}
+        for key in timings:
+            assert timings[key] >= 0
+        assert timings["total_ms"] >= timings["llm_ms"]

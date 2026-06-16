@@ -54,7 +54,7 @@ pip install -r requirements.txt
 ```env
 DASHSCOPE_API_KEY=你的_API_Key
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-DASHSCOPE_MODEL=qwen3.6-plus-2026-04-02
+DASHSCOPE_MODEL=deepseek-v4-flash
 
 # 可选：API 监听地址
 # RENXINOS_HOST=127.0.0.1

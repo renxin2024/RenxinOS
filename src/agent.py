@@ -7,6 +7,7 @@ ask_agent(): 检索笔记 chunks → 拼 prompt → 调用 LLM 回答
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import jieba
@@ -18,7 +19,7 @@ client = OpenAI(
     api_key=os.getenv("DASHSCOPE_API_KEY"),
     base_url=os.getenv("DASHSCOPE_BASE_URL"),
 )
-DEFAULT_MODEL = os.getenv("DASHSCOPE_MODEL", "qwen3.6-plus-2026-04-02")
+DEFAULT_MODEL = os.getenv("DASHSCOPE_MODEL", "deepseek-v4-flash")
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 CHUNKS_PATH = DATA_DIR / "chunks.json"
@@ -173,15 +174,28 @@ def _build_system_prompt(hits: list[dict]) -> str:
     )
 
 
+def _elapsed_ms(start: float) -> float:
+    """自 perf_counter 起点起的毫秒数（保留 1 位小数）。"""
+    return round((time.perf_counter() - start) * 1000, 1)
+
+
 def ask_agent(user_input: str, top_k: int = RETRIEVE_TOP_K) -> str:
     return ask_agent_with_meta(user_input, top_k=top_k)["answer"]
 
 
 def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
-    """返回答案 + 检索来源，供 API 使用。"""
-    hits = retrieve(user_input, top_k=top_k)
-    system_prompt = _build_system_prompt(hits)
+    """返回答案 + 检索来源 + 分阶段耗时，供 API 使用。"""
+    total_start = time.perf_counter()
 
+    retrieve_start = time.perf_counter()
+    hits = retrieve(user_input, top_k=top_k)
+    retrieve_ms = _elapsed_ms(retrieve_start)
+
+    prompt_start = time.perf_counter()
+    system_prompt = _build_system_prompt(hits)
+    prompt_ms = _elapsed_ms(prompt_start)
+
+    llm_start = time.perf_counter()
     response = client.chat.completions.create(
         model=DEFAULT_MODEL,
         messages=[
@@ -189,6 +203,8 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
             {"role": "user", "content": user_input},
         ],
     )
+    llm_ms = _elapsed_ms(llm_start)
+
     answer = response.choices[0].message.content
     sources = [
         {
@@ -198,5 +214,14 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
         }
         for hit in hits
     ]
-    return {"answer": answer, "sources": sources}
+    return {
+        "answer": answer,
+        "sources": sources,
+        "timings": {
+            "retrieve_ms": retrieve_ms,
+            "prompt_ms": prompt_ms,
+            "llm_ms": llm_ms,
+            "total_ms": _elapsed_ms(total_start),
+        },
+    }
 
