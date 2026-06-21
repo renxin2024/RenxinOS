@@ -2,6 +2,10 @@
 """
 Renxin OS — Agent 核心模块
 ask_agent(): 检索笔记 chunks → 拼 prompt → 调用 LLM 回答
+
+检索策略：Hybrid（keyword 优先，不足时 embedding 兜底）
+- keyword recall >= KW_RECALL_THRESHOLD 时直接返回，不调 embedding API
+- keyword 不足时调用 text-embedding-v4 语义检索补充，通过 RRF 融合结果
 """
 
 import json
@@ -14,6 +18,10 @@ import jieba
 from dotenv import load_dotenv
 from openai import OpenAI
 
+# retrieve_semantic: 基于 text-embedding-v4 的语义检索，keyword 不足时兜底
+# 只在需要时 import，避免冷启动时不必要的 embedding 模型加载
+from src.embedding import retrieve_semantic, load_embeddings
+
 load_dotenv()
 client = OpenAI(
     api_key=os.getenv("DASHSCOPE_API_KEY"),
@@ -25,6 +33,20 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 CHUNKS_PATH = DATA_DIR / "chunks.json"
 RETRIEVE_TOP_K = 8
 MAX_CHUNK_CHARS = 600
+
+# Hybrid 检索配置
+# KW_RECALL_THRESHOLD: keyword 检索「足够好」的判定阈值
+# - keyword 结果数 >= 此值 且 top-1 score >= KW_MIN_SCORE 时，直接返回不调 embedding
+# - 类比 Java: 类似缓存命中率的 HIT_THRESHOLD，低于阈值才穿透到下一层
+KW_RECALL_THRESHOLD = 4       # keyword 至少找到 4 个结果才算「够」
+KW_MIN_SCORE = 6              # top-1 的关键词重叠分数至少为 6
+# 调参记录：
+#   v1: KW_MIN_SCORE=2 → Hybrid=67.7%（过宽，Q9/Q16 假命中）
+#   v2: KW_MIN_SCORE=6 → 需评测验证（收紧后 Q9/Q16 强制走 embedding 路径）
+
+# RRF 常数 k：防止排名靠前但分数很高的结果过度主导融合结果
+# 论文推荐值 60，实践中个人知识库用小值（20）让排名影响更明显
+_RRF_K = 20
 
 # 问句关键词 → 笔记常用表述（弥补 keyword 字面不匹配）
 _QUERY_EXPANSIONS: dict[str, list[str]] = {
@@ -111,6 +133,110 @@ def _expand_query_tokens(query: str, base_tokens: set[str]) -> set[str]:
     return expanded
 
 
+def _rrf_merge(
+    kw_hits: list[dict],
+    em_hits: list[dict],
+    top_k: int,
+) -> list[dict]:
+    """
+    RRF（Reciprocal Rank Fusion）：将 keyword 和 embedding 两路结果融合为一路。
+
+    核心公式: RRF_score(doc) = sum(1 / (k + rank_i))
+    - rank_i: 该文档在第 i 路结果中的排名（从 1 开始）
+    - k: 常数（_RRF_K = 20），防止排名 1 的结果分数过高
+
+    为什么用排名而非原始分数:
+    - keyword score 范围是整数（1~10+），embedding score 是浮点数（0~1）
+    - 直接加权要先归一化，且不同查询的分布不同
+    - 用排名规避了这个问题：排名 1 的就是最好的，不管原始分数是多少
+    - 类比 Java: 类似 Comparator.comparingInt(rank) 而非 Comparator.comparingDouble(score)
+
+    参数:
+        kw_hits: keyword 检索结果，已按 score 降序
+        em_hits: embedding 检索结果，已按 score 降序
+        top_k: 返回前几个
+
+    返回:
+        融合后的结果列表，每项含 rrf_score 字段
+    """
+    # rrf_scores: dict，key = chunk 的唯一 id，value = 累计 RRF 分数
+    # 类比 Java: Map<String, Double> rrfScores = new HashMap<>()
+    rrf_scores: dict[str, float] = {}
+
+    # chunk_map: 存储每个 id 对应的完整 chunk 数据（用于最终输出）
+    chunk_map: dict[str, dict] = {}
+
+    # 遍历两路结果，分别计算 RRF 贡献
+    for hits in (kw_hits, em_hits):
+        for rank, hit in enumerate(hits, start=1):
+            # 用 id 字段作为文档唯一标识（chunks.json 中有 id 字段）
+            doc_id = hit.get("id", hit.get("file", "") + "#" + hit.get("heading", ""))
+
+            # RRF 公式: 1 / (k + rank)
+            # enumerate 从 1 开始，所以 rank=1 是最相关的文档
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (_RRF_K + rank)
+
+            # 保存 chunk 数据（keyword 和 embedding 可能有同一个 chunk，用任意一个都行）
+            if doc_id not in chunk_map:
+                chunk_map[doc_id] = hit
+
+    # 按 RRF 分数降序排列，取前 top_k 个
+    sorted_ids = sorted(rrf_scores, key=lambda x: -rrf_scores[x])
+    results = []
+    for doc_id in sorted_ids[:top_k]:
+        hit = dict(chunk_map[doc_id])
+        hit["rrf_score"] = rrf_scores[doc_id]   # 记录融合分数（方便调试）
+        hit["score"] = rrf_scores[doc_id]        # 统一 score 字段，兼容下游代码
+        results.append(hit)
+
+    return results
+
+
+def retrieve_hybrid(query: str, top_k: int = RETRIEVE_TOP_K) -> list[dict]:
+    """
+    Hybrid 检索：keyword 优先，不足时 embedding 兜底，通过 RRF 融合。
+
+    策略（Cascade Retrieval）:
+        1. 先跑 keyword 检索（本地运算，零 API 成本，毫秒级）
+        2. 如果 keyword 结果足够好（数量 >= KW_RECALL_THRESHOLD 且 top-1 分数 >= KW_MIN_SCORE）
+           → 直接返回，不调 embedding API
+        3. 否则，补充调用 embedding 检索（有 API 成本，~200ms 延迟）
+        4. 两路结果通过 RRF 融合，返回最终 top_k
+
+    适用场景:
+        - 精确术语查询（GTD、SMART、checkbox）→ keyword 通常能命中，embedding 不触发
+        - 口语化/模糊查询（「手头事太多」）→ keyword 不足，触发 embedding 兜底
+
+    类比 Java:
+        类似二级缓存（L1 本地缓存 + L2 远程缓存）：
+        先查 L1（快、免费），命中则返回；未命中才查 L2（慢、有成本）
+    """
+    # 第一步：keyword 检索（本地，零成本）
+    # 注意：retrieve() 里的 top_k 参数控制返回数量，我们先要回 top_k 条再判断质量
+    kw_hits = retrieve(query, top_k=top_k)
+
+    # 第二步：判断 keyword 是否「足够好」
+    # 条件：结果数量够 AND top-1 分数够高
+    kw_good = (
+        len(kw_hits) >= KW_RECALL_THRESHOLD
+        and kw_hits[0].get("score", 0) >= KW_MIN_SCORE
+    )
+
+    if kw_good:
+        # keyword 够用，直接返回（不调 embedding API，省钱省时间）
+        return kw_hits
+
+    # 第三步：keyword 不足，调用 embedding 语义检索兜底
+    em_hits = retrieve_semantic(query, top_k=top_k)
+
+    # 第四步：RRF 融合两路结果
+    # 如果 keyword 完全没有结果，em_hits 就是全部；有部分结果则融合
+    if not kw_hits:
+        return em_hits  # keyword 完全没命中，直接返回 embedding 结果
+
+    return _rrf_merge(kw_hits, em_hits, top_k=top_k)
+
+
 def retrieve(query: str, top_k: int = 3) -> list[dict]:
     """
     基于 jieba 分词 + 词重叠打分的 keyword 检索。
@@ -188,7 +314,8 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
     total_start = time.perf_counter()
 
     retrieve_start = time.perf_counter()
-    hits = retrieve(user_input, top_k=top_k)
+    # retrieve_hybrid: keyword 优先，不足时 embedding 兜底（Cascade Retrieval）
+    hits = retrieve_hybrid(user_input, top_k=top_k)
     retrieve_ms = _elapsed_ms(retrieve_start)
 
     prompt_start = time.perf_counter()
