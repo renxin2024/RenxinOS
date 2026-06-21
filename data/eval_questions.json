@@ -1,0 +1,302 @@
+[
+  {
+    "id": 1,
+    "question": "什么是4D工作法？",
+    "type": "single_hop",
+    "expected_source_files": [
+      "ABC + 4D工作法判断优先级.md"
+    ],
+    "expected_answer_keywords": [
+      "删除",
+      "委托",
+      "立即做",
+      "延后",
+      "重要",
+      "紧急"
+    ],
+    "ground_truth_answer": "4D代表四种任务处理方式：Delete(删除不重要不紧急的)、Delegate(委托不重要但紧急的)、Do it now(立即做重要且紧急的)、Defer(延后重要但不紧急的)。按重要性和紧急性两个维度对任务进行分类决策。",
+    "difficulty": "easy"
+  },
+  {
+    "id": 2,
+    "question": "GTD的核心理念是什么？",
+    "type": "single_hop",
+    "expected_source_files": [
+      "GTD工作法框架.md"
+    ],
+    "expected_answer_keywords": [
+      "人脑不是用来储存信息的",
+      "外部系统",
+      "压力",
+      "该做而没做"
+    ],
+    "ground_truth_answer": "GTD核心理念：人脑不是用来储存信息的，而是用来解决问题的。压力来自于该做而没做的事情堆积在脑中。需要建立一个可靠的外部系统来管理所有事务，才能轻松应对生活与工作。",
+    "difficulty": "easy"
+  },
+  {
+    "id": 3,
+    "question": "SMART目标的五个字母分别代表什么？",
+    "type": "single_hop",
+    "expected_source_files": [
+      "SMART目标管理.md"
+    ],
+    "expected_answer_keywords": [
+      "Specific",
+      "Measurable",
+      "Achievable",
+      "Relevant",
+      "Time-bound",
+      "明确具体",
+      "可衡量"
+    ],
+    "ground_truth_answer": "S=Specific(明确具体)、M=Measurable(可衡量)、A=Achievable(可实现)、R=Relevant(相关)、T=Time-bound(有时限)。用于定义清晰、可量化、可执行的目标。",
+    "difficulty": "easy"
+  },
+  {
+    "id": 4,
+    "question": "每天最多可以安排几个主块和副块？",
+    "type": "single_hop",
+    "expected_source_files": [
+      "计划执行防护规则.md"
+    ],
+    "expected_answer_keywords": [
+      "1 主",
+      "1 副",
+      "堆叠",
+      "Defer 到明天",
+      "限并发"
+    ],
+    "ground_truth_answer": "每天最多1个主块+1个副块。其余任务Defer到明天。如果今日执行超过2个时间块任务，说明又在堆叠，需删减。",
+    "difficulty": "easy"
+  },
+  {
+    "id": 5,
+    "question": "打勾完成的任务应该记录在哪里？日志里能改任务状态吗？",
+    "type": "multi_hop",
+    "expected_source_files": [
+      "决策与执行速查.md",
+      "时间任务管理统一工作流.md"
+    ],
+    "expected_answer_keywords": [
+      "全局任务池",
+      "projects",
+      "日志只写总结",
+      "铁律",
+      "任务状态"
+    ],
+    "ground_truth_answer": "铁律规定：任务checkbox只允许写在全局任务池的「今日执行」和projects/目录下的项目文件中。日志只写总结，不改变任务状态。任务状态只在任务池/projects中修改。",
+    "difficulty": "medium"
+  },
+  {
+    "id": 6,
+    "question": "执行工作时常见的三种分散类型是什么？怎么防范？",
+    "type": "multi_hop",
+    "expected_source_files": [
+      "计划执行防护规则.md",
+      "常犯的错误.md"
+    ],
+    "expected_answer_keywords": [
+      "未登记就开工",
+      "深度工作堆叠",
+      "探索型无边界",
+      "登记",
+      "限并发",
+      "保护时段",
+      "三道闸"
+    ],
+    "ground_truth_answer": "三种分散类型：1)未登记就开工——临时事项直接占用时间；2)深度工作堆叠——一天排多个需整块专注的任务；3)探索型无边界——再查一点再优化一下没有停手点。根因是缺少登记、限并发、保护时段三道闸。",
+    "difficulty": "medium"
+  },
+  {
+    "id": 7,
+    "question": "读完一本书后怎么做笔记？分几步？",
+    "type": "multi_hop",
+    "expected_source_files": [
+      "阅读与笔记原则.md"
+    ],
+    "expected_answer_keywords": [
+      "首读",
+      "结构回顾",
+      "深度笔记",
+      "全书一页纸",
+      "挂钩",
+      "48h"
+    ],
+    "ground_truth_answer": "三阶段：①首读——读完，允许书上划线，不写长笔记；②结构回顾——合上书仍能说清框架，产出全书一页纸+体系挂钩1行，首读后48h内完成，限1番茄；③深度笔记——实践笔记+与体系挂钩，2-4番茄/本。",
+    "difficulty": "medium"
+  },
+  {
+    "id": 8,
+    "question": "我总是忍不住去优化系统和工具，怎么办？",
+    "type": "fuzzy",
+    "expected_source_files": [
+      "计划执行防护规则.md",
+      "常犯的错误.md",
+      "问题驱动优于工具驱动.md"
+    ],
+    "expected_answer_keywords": [
+      "探索型",
+      "限额",
+      "2 个番茄",
+      "问题驱动",
+      "工具驱动",
+      "忙碌感",
+      "逃避难任务"
+    ],
+    "ground_truth_answer": "这属于探索型工作，容易无限膨胀。限制每周最多2个番茄用于探索型工作，超出必须Defer。核心原则是问题驱动优于工具驱动——先问题后工具，不要因为掌握了某个工具而寻找应用场景。自问：这是在推进实际任务，还是在用忙碌感逃避难任务？",
+    "difficulty": "hard"
+  },
+  {
+    "id": 9,
+    "question": "工作中突然被打断了，怎么快速回到正轨？",
+    "type": "fuzzy",
+    "expected_source_files": [
+      "计划执行防护规则.md"
+    ],
+    "expected_answer_keywords": [
+      "停",
+      "收件箱",
+      "回",
+      "30 秒清单",
+      "番茄内只记录不切换"
+    ],
+    "ground_truth_answer": "使用30秒清单处理中断：停→不切换窗口；记→收件箱一行；回→回到当前番茄。番茄内只记录、不切换，中断事项等当前番茄结束后再4D决定。",
+    "difficulty": "hard"
+  },
+  {
+    "id": 10,
+    "question": "遇到一件大事，怎么判断要不要专门做个决策分析？",
+    "type": "fuzzy",
+    "expected_source_files": [
+      "决策与执行速查.md"
+    ],
+    "expected_answer_keywords": [
+      "影响",
+      "1 年",
+      "难逆转",
+      "高赌注",
+      "L2",
+      "L3",
+      "决策管线",
+      "任意 2 条"
+    ],
+    "ground_truth_answer": "三条快判标准，满足任意2条就需要开决策系统(L2/L3)：1)影响>=1年职业/城市/家庭；2)难逆转或逆转成本高；3)高赌注（runway、收入、家庭稳定显著受影响）。否则只进任务池走4D流程。",
+    "difficulty": "hard"
+  },
+  {
+    "id": 11,
+    "question": "如何用 LangChain 搭建 Agent？",
+    "type": "unanswerable",
+    "expected_source_files": [],
+    "expected_answer_keywords": [
+      "未找到",
+      "没有相关",
+      "不包含"
+    ],
+    "ground_truth_answer": "知识库中不包含LangChain相关内容，应明确告知用户笔记中没有这方面的信息，而不是编造答案。",
+    "difficulty": "medium",
+    "note": "负例题：测试系统是否会胡说八道"
+  },
+  {
+    "id": 12,
+    "question": "帮我写一个 Python 爬虫抓取豆瓣电影 Top250",
+    "type": "unanswerable",
+    "expected_source_files": [],
+    "expected_answer_keywords": [
+      "未找到",
+      "没有相关",
+      "不包含"
+    ],
+    "ground_truth_answer": "知识库是关于个人GTD任务管理和方法论的笔记，不包含Python编程或爬虫相关内容，应明确告知用户。",
+    "difficulty": "easy",
+    "note": "负例题：完全超出知识库领域的问题"
+  },
+  {
+    "id": 13,
+    "question": "怎么判断一个任务是该做、该委托、该推迟还是该删？",
+    "type": "paraphrase",
+    "paraphrase_group": "4D",
+    "paraphrase_of": 1,
+    "expected_source_files": [
+      "ABC + 4D工作法判断优先级.md"
+    ],
+    "expected_answer_keywords": [
+      "删除",
+      "委托",
+      "立即做",
+      "延后",
+      "重要",
+      "紧急"
+    ],
+    "ground_truth_answer": "4D工作法按重要性和紧急性两个维度分类：重要且紧急→立即做(Do)；重要不紧急→延后(Defer)；不重要但紧急→委托(Delegate)；不重要不紧急→删除(Delete)。",
+    "difficulty": "medium",
+    "note": "Q1的口语化改写，测试检索泛化能力"
+  },
+  {
+    "id": 14,
+    "question": "手头上的事太多了，怎么决定先做哪个？",
+    "type": "paraphrase",
+    "paraphrase_group": "4D",
+    "paraphrase_of": 1,
+    "expected_source_files": [
+      "ABC + 4D工作法判断优先级.md"
+    ],
+    "expected_answer_keywords": [
+      "删除",
+      "委托",
+      "立即做",
+      "延后",
+      "重要",
+      "紧急"
+    ],
+    "ground_truth_answer": "用4D工作法判断：按重要性和紧急性分四类——立即做、延后、委托、删除。重要且紧急的先做，不重要不紧急的直接删除。",
+    "difficulty": "hard",
+    "note": "Q1的更口语化改写，完全不提4D术语"
+  },
+  {
+    "id": 15,
+    "question": "要不要写个决策文档？什么时候值得花时间做分析？",
+    "type": "paraphrase",
+    "paraphrase_group": "decision",
+    "paraphrase_of": 10,
+    "expected_source_files": [
+      "决策与执行速查.md"
+    ],
+    "expected_answer_keywords": [
+      "影响",
+      "1 年",
+      "难逆转",
+      "高赌注",
+      "L2",
+      "L3",
+      "决策管线",
+      "任意 2 条"
+    ],
+    "ground_truth_answer": "三条快判标准满足任意2条就值得开决策系统：影响>=1年、难逆转、高赌注。满足就写决策文档(L2/L3)，不满足就进任务池走4D。",
+    "difficulty": "medium",
+    "note": "Q10的口语化改写，测试非术语表述的检索能力"
+  },
+  {
+    "id": 16,
+    "question": "碰到一个选择，影响挺大的，要不要单独想想？",
+    "type": "paraphrase",
+    "paraphrase_group": "decision",
+    "paraphrase_of": 10,
+    "expected_source_files": [
+      "决策与执行速查.md"
+    ],
+    "expected_answer_keywords": [
+      "影响",
+      "1 年",
+      "难逆转",
+      "高赌注",
+      "L2",
+      "L3",
+      "决策管线",
+      "任意 2 条"
+    ],
+    "ground_truth_answer": "影响>=1年、难逆转、高赌注三条中满足任意2条就需要专门做决策分析(L2/L3决策管线)，否则只进任务池。",
+    "difficulty": "hard",
+    "note": "Q10的极口语化改写，完全不用决策术语"
+  }
+]
