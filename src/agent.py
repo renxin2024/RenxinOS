@@ -21,6 +21,7 @@ from openai import OpenAI
 # retrieve_semantic: 基于 text-embedding-v4 的语义检索，keyword 不足时兜底
 # 只在需要时 import，避免冷启动时不必要的 embedding 模型加载
 from src.embedding import retrieve_semantic, load_embeddings
+from src.trace import start_trace, log_step, end_trace
 
 load_dotenv()
 client = OpenAI(
@@ -212,11 +213,22 @@ def retrieve_hybrid(query: str, top_k: int = RETRIEVE_TOP_K) -> list[dict]:
         先查 L1（快、免费），命中则返回；未命中才查 L2（慢、有成本）
     """
     # 第一步：keyword 检索（本地，零成本）
-    # 注意：retrieve() 里的 top_k 参数控制返回数量，我们先要回 top_k 条再判断质量
+    kw_start = time.perf_counter()
     kw_hits = retrieve(query, top_k=top_k)
+    kw_elapsed = (time.perf_counter() - kw_start) * 1000
+
+    # trace: 记录 keyword 检索的输入输出
+    log_step("keyword_retrieve",
+        input_summary={"query": query, "top_k": top_k},
+        output_summary={
+            "hit_count": len(kw_hits),
+            "top_score": kw_hits[0].get("score", 0) if kw_hits else 0,
+            "files": [h.get("file", "") for h in kw_hits[:3]],
+        },
+        elapsed_ms=kw_elapsed,
+    )
 
     # 第二步：判断 keyword 是否「足够好」
-    # 条件：结果数量够 AND top-1 分数够高
     kw_good = (
         len(kw_hits) >= KW_RECALL_THRESHOLD
         and kw_hits[0].get("score", 0) >= KW_MIN_SCORE
@@ -224,17 +236,54 @@ def retrieve_hybrid(query: str, top_k: int = RETRIEVE_TOP_K) -> list[dict]:
 
     if kw_good:
         # keyword 够用，直接返回（不调 embedding API，省钱省时间）
+        log_step("hybrid_decision",
+            input_summary={"kw_hit_count": len(kw_hits), "kw_top_score": kw_hits[0].get("score", 0)},
+            output_summary={"decision": "keyword_only", "reason": "kw_good=True"},
+            elapsed_ms=0.1,
+        )
         return kw_hits
 
     # 第三步：keyword 不足，调用 embedding 语义检索兜底
+    em_start = time.perf_counter()
     em_hits = retrieve_semantic(query, top_k=top_k)
+    em_elapsed = (time.perf_counter() - em_start) * 1000
+
+    # trace: 记录 embedding 检索的输入输出
+    log_step("embedding_retrieve",
+        input_summary={"query": query, "top_k": top_k},
+        output_summary={
+            "hit_count": len(em_hits),
+            "top_score": round(em_hits[0].get("score", 0), 4) if em_hits else 0,
+            "files": [h.get("file", "") for h in em_hits[:3]],
+        },
+        elapsed_ms=em_elapsed,
+    )
 
     # 第四步：RRF 融合两路结果
-    # 如果 keyword 完全没有结果，em_hits 就是全部；有部分结果则融合
     if not kw_hits:
-        return em_hits  # keyword 完全没命中，直接返回 embedding 结果
+        log_step("hybrid_decision",
+            input_summary={"kw_hit_count": 0},
+            output_summary={"decision": "embedding_only", "reason": "kw_empty"},
+            elapsed_ms=0.1,
+        )
+        return em_hits
 
-    return _rrf_merge(kw_hits, em_hits, top_k=top_k)
+    merged = _rrf_merge(kw_hits, em_hits, top_k=top_k)
+    log_step("rrf_merge",
+        input_summary={"kw_count": len(kw_hits), "em_count": len(em_hits), "top_k": top_k},
+        output_summary={
+            "merged_count": len(merged),
+            "top_rrf_score": round(merged[0].get("rrf_score", 0), 5) if merged else 0,
+            "files": [h.get("file", "") for h in merged[:3]],
+        },
+        elapsed_ms=0.1,  # RRF 是纯内存计算，忽略不计
+    )
+    log_step("hybrid_decision",
+        input_summary={"kw_hit_count": len(kw_hits), "kw_top_score": kw_hits[0].get("score", 0)},
+        output_summary={"decision": "rrf_merged", "reason": "kw_not_good_enough"},
+        elapsed_ms=0.1,
+    )
+    return merged
 
 
 def retrieve(query: str, top_k: int = 3) -> list[dict]:
@@ -311,17 +360,28 @@ def ask_agent(user_input: str, top_k: int = RETRIEVE_TOP_K) -> str:
 
 def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
     """返回答案 + 检索来源 + 分阶段耗时，供 API 使用。"""
+    # trace: 开始记录本次请求的完整调用链
+    start_trace(user_input)
+
     total_start = time.perf_counter()
 
     retrieve_start = time.perf_counter()
     # retrieve_hybrid: keyword 优先，不足时 embedding 兜底（Cascade Retrieval）
+    # 内部已经加了 trace 埋点（keyword_retrieve / embedding_retrieve / rrf_merge）
     hits = retrieve_hybrid(user_input, top_k=top_k)
     retrieve_ms = _elapsed_ms(retrieve_start)
 
+    # trace: 记录 prompt 构建
     prompt_start = time.perf_counter()
     system_prompt = _build_system_prompt(hits)
     prompt_ms = _elapsed_ms(prompt_start)
+    log_step("build_prompt",
+        input_summary={"hit_count": len(hits)},
+        output_summary={"prompt_length": len(system_prompt)},
+        elapsed_ms=prompt_ms,
+    )
 
+    # trace: 记录 LLM 调用
     llm_start = time.perf_counter()
     response = client.chat.completions.create(
         model=DEFAULT_MODEL,
@@ -331,8 +391,13 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
         ],
     )
     llm_ms = _elapsed_ms(llm_start)
-
     answer = response.choices[0].message.content
+    log_step("llm_call",
+        input_summary={"model": DEFAULT_MODEL, "messages_count": 2},
+        output_summary={"answer_length": len(answer), "finish_reason": response.choices[0].finish_reason},
+        elapsed_ms=llm_ms,
+    )
+
     sources = [
         {
             "file": hit.get("file", ""),
@@ -341,7 +406,7 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
         }
         for hit in hits
     ]
-    return {
+    result = {
         "answer": answer,
         "sources": sources,
         "timings": {
@@ -351,4 +416,9 @@ def ask_agent_with_meta(user_input: str, top_k: int = RETRIEVE_TOP_K) -> dict:
             "total_ms": _elapsed_ms(total_start),
         },
     }
+
+    # trace: 结束记录，写入文件
+    end_trace(result)
+
+    return result
 
