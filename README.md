@@ -242,10 +242,36 @@ RenxinOS/
 |------|------|----------|
 | **V1** | 2026-06-17 | jieba 关键词检索 + `/chat` + timings |
 | **V2** | 2026-06-21 | + text-embedding-v4 · RRF 混合检索 · 16 题评测集 · Recall@8=84.4% |
+| 🔄 **V3** | 进行中 | 手写 ReAct Agent Loop · tool schema · function calling · react trace viewer |
+---
+
+## 学习笔记（docs/learning/）
+
+| 版本 | 笔记 | 核心主题 |
+|------|------|----------|
+| V1 | [Keyword RAG 从零搭建](docs/learning/v1-rag-keyword.md) | 切块入库 · jieba 分词 · prompt 拼装 · 面试讲法 |
+| V2 | [Embedding 检索与评测体系](docs/learning/v2-eval-embedding.md) | 语义检索 · RRF 融合 · 16 题评测 · 失败模式 |
+| V3 | [手写 ReAct Agent](docs/learning/v3-raw-react-agent.md) | Agent Loop · tool schema · parse_tool_call · 框架对照 |
+| — | [为什么大模型能调用工具了？](docs/learning/v3-why-llm-can-call-tools.md) | 第一性原理：模型不变，变的只是输出格式 + 调用方解析 |
+| — | [指令遵循与 Agent 专用模型](docs/learning/v3-instruction-following-and-agent-model.md) | 指令遵循测什么 · Agent 模型 vs 通用模型 · 映射到 V3 代码 |
+| — | [Agent 模型选型与训练三阶段](docs/learning/v3-agent-model-selection-and-training.md) | 主流模型对比 · 五维评估 · 预训练/后训练/微调 |
+| — | [Tool Calling API vs Prompt 手写](docs/learning/v3-tool-calling-api-vs-prompt.md) | 有/无 API 的本质区别 · 后训练差异 · V3→V4 精确映射 |
+| — | [Attention 机制数学推导](docs/learning/v3-attention-mechanism-math.md) | Q/K/V 矩阵 · softmax 公式 · scale factor 原理 · Multi-Head |
+| — | [ReAct 论文精读](docs/learning/v3-react-paper-deep-read.md) | 论文动机 · 消融实验 · CoT vs ReAct · 精确映射到 V3 代码 |
+| — | [ReAct 思考题解析](docs/learning/v3-react-thinking-qa.md) | 概念题 / 走读题 / 设计题（含解析） |
+| — | [OpenHands 架构调研](docs/learning/v3-openhands-research.md) | 事件系统 · Tool 抽象 · 沙箱执行 |
+| V4 | [MCP 协议规范阅读](docs/learning/v4-mcp-protocol-deep-read.md) | tools/list · tools/call · transport 层 · V3→MCP 映射 |
+| V2 | [RAG 评测入门教学](docs/learning/v2-rag-eval-intro.md) | 7 节课：出题→基线→诊断→鲁棒性 |
+| — | [RAG 评测题设计方法论](docs/learning/v2-rag-eval-methodology.md) | 方法论 + 企业实践 + 演进路线 |
+| — | [RRF 算法讲解](docs/learning/v2-rrf-algorithm.md) | Reciprocal Rank Fusion 原理与参数 |
+| — | [模型与工具矩阵](docs/learning/model-tool-matrix.md) | 模型选型 + 工具链对照 |
+| — | [精读论文列表](docs/learning/reading-list.md) | 10 篇经典论文 + 阅读节奏 |
 
 ---
 
 ## 相关文档
 
 - 执行规格与版本路线图：`~/ai_brain/todo/tasks/projects/Agent开发学习计划/RenxinOS-执行规格.md`
+- 验收清单与子步 checklist：`~/ai_brain/todo/tasks/projects/Agent开发学习计划/RenxinOS-验收清单.md`
+- 每日执行周历：`~/ai_brain/todo/tasks/projects/Agent开发学习计划/RenxinOS-周历.md`
 - 原则笔记源目录：`data/principle/README.md`
