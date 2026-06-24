@@ -1,29 +1,43 @@
 # Renxin OS
 
-基于个人 Obsidian 笔记的 RAG 问答服务：把 `data/principle/` 下的 Markdown 切块入库，用**关键词 + Embedding 混合检索**召回相关片段，再调用大模型生成答案。
+Java → Agent Developer 求职作品集，聚焦「RAG 检索质量 + 手写 Agent 原理」。V1–V5 先就业，V6+ 在职进阶 Enterprise AI Architect。
 
 **V2 能力**：笔记入库 · jieba 关键词检索 · text-embedding-v4 语义检索 · RRF 混合检索 · 16 题评测集 + Recall@k · `POST /chat` 返回答案、来源与分阶段耗时 · [Scalar](http://127.0.0.1:8000/scalar) 交互式 API 文档。
+
+**V3 能力**：手写 ReAct Agent Loop · function calling（Tool Schema + Registry + 三层降级解析）· State dict 对话历史管理 · 真实任务池解析 · CLI REPL · Trace Viewer · 测试 49 个全绿。
 
 ---
 
 ## 项目简介
 
-Renxin OS 是 Java 转型 AI / Agent 方向的作品集项目，当前版本聚焦「可评测的 RAG 检索质量」：
+| 版本 | 模块 | 说明 |
+|------|------|------|
+| V2 | `src/ingest.py` | 读取 `data/principle/*.md`，按标题切块，输出 `data/chunks.json` |
+| V2 | `src/embedding.py` | 调用 DashScope text-embedding-v4 生成向量，缓存至 `data/embeddings.json` |
+| V2 | `src/agent.py` | 关键词检索(jieba) + Embedding 语义检索 + RRF 混合融合，拼接 prompt 后调用 LLM |
+| V2 | `src/api.py` | FastAPI 暴露 `/health`、`POST /chat`；`/scalar` 提供 API 调试页 |
+| V3 | `src/agent_raw/react_loop.py` | 手写 ReAct 主循环：prompt 模板 → LLM 调用 → 解析输出 → 工具执行 → 状态记录 |
+| V3 | `src/agent_raw/tools.py` | 工具系统：`ToolDef` Schema 定义 + `ToolRegistry` IoC 注册 + 三层降级解析（JSON块→裸JSON→文本ReAct） |
+| V3 | `src/agent_raw/state.py` | 状态管理：`StepRecord`（不可变单步记录）→ `AgentState`（会话状态）→ `StateManager`（生命周期管理） |
+| V3 | `src/agent_raw/main.py` | CLI 入口：单问题模式 + 交互式 REPL，支持 `--steps`/`--mock` 参数 |
+| V3 | `src/agent_raw/react_trace_viewer.py` | Trace 可视化：读取 JSONL → 生成交互式 HTML，展示 prompt/raw_output/observation 全链路 |
 
-| 模块 | 说明 |
-|------|------|
-| `src/ingest.py` | 读取 `data/principle/*.md`，按标题切块，输出 `data/chunks.json` |
-| `src/embedding.py` | 调用 DashScope text-embedding-v4 生成向量，缓存至 `data/embeddings.json` |
-| `src/agent.py` | 关键词检索(jieba) + Embedding 语义检索 + RRF 混合融合，拼接 prompt 后调用 LLM |
-| `src/api.py` | FastAPI 暴露 `/health`、`POST /chat`；`/scalar` 提供 API 调试页 |
-
-数据流：
+V2 数据流：
 
 ```
 principle/*.md → ingest → chunks.json → [keyword + embedding] → RRF merge → LLM → answer + sources + timings
 ```
 
-**当前不含**：LangGraph、MCP、前端 UI（见路线图 V3+）。
+V3 数据流：
+
+```
+用户问题 → ReAct Loop → Thought → Action(tool) → Observation → … → Final Answer
+                ↑                            ↓
+          StateManager               search_notes (查笔记)
+          (StepRecord × N)           search_tasks (查任务池)
+```
+
+**当前不含**：LangGraph、MCP、前端 UI（见路线图 V4+）。
 
 ---
 
@@ -166,6 +180,40 @@ python -c "from src.embedding import build_embeddings; build_embeddings()"
 
 服务无需改代码；若 API 已在运行，重启后即加载新数据。
 
+### V3 手写 ReAct Agent（命令行）
+
+```bash
+source .venv/bin/activate
+
+# 需要配置 DeepSeek API Key（.env 中）
+# DEEPSEEK_API_KEY=你的Key
+# DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+# DEEPSEEK_MODEL=deepseek-chat
+
+# 单问题模式
+python -m src.agent_raw.main "今天主块是什么？"
+
+# 交互式 REPL 模式（连续提问）
+python -m src.agent_raw.main -i
+
+# 使用 mock 工具（无需真实数据，测试用）
+python -m src.agent_raw.main -i --mock
+
+# 自定义最大步数
+python -m src.agent_raw.main --steps 3 "GTD 的 checkbox 规则是什么？"
+```
+
+REPL 模式下输入 `exit` 或 `quit` 退出，输入 `demo` 查看示例问题。
+
+### Trace 可视化
+
+每次 `run_react` 执行后，完整 LLM 交互链写入 `data/react_traces.jsonl`。查看：
+
+```bash
+python -m src.agent_raw.react_trace_viewer
+# 浏览器打开生成的 HTML，可交互查看每步 prompt / raw_output / observation
+```
+
 ---
 
 ## 验收用例
@@ -197,15 +245,17 @@ GTD 任务 checkbox 只允许写在哪两个地方？
 
 ## Demo 自检
 
-| 检查项 | 命令 / 操作 | 结果（2026-06-21） |
-|--------|-------------|-------------------|
-| 单元测试 | `pytest` | **14 passed** |
+| 检查项 | 命令 / 操作 | 结果 |
+|--------|-------------|------|
+| 单元测试 | `pytest` | **49 passed** |
 | 健康检查 | `GET /health` | `200` · `{"status":"ok"}` |
 | API 文档 | `GET /scalar` | `200` · Scalar 页可打开 |
 | 问答接口 | `POST /chat` | `200` · 返回答案 + sources + timings |
 | 空问题校验 | `POST /chat` `{"question":"   "}` | `400` |
 | 评测集 | `python scripts/run_hybrid_eval.py` | Recall@8=84.4% · 0 failure |
 | Sanity check | `python scripts/eval_sanity_check.py` | ✅ 三项全绿 |
+| V3 工具测试 | `pytest tests/test_agent_raw_tools.py` | **20 passed** |
+| V3 状态+任务池测试 | `pytest tests/test_s4_s5_state.py` | **29 passed** |
 
 ---
 
@@ -214,22 +264,33 @@ GTD 任务 checkbox 只允许写在哪两个地方？
 ```
 RenxinOS/
 ├── data/
-│   ├── principle/         # 源笔记（Markdown）
-│   ├── chunks.json        # ingest 产物（勿手改）
-│   ├── embeddings.json    # embedding 向量缓存（勿手改）
-│   └── eval_questions.json # 16 题评测集
+│   ├── principle/              # 源笔记（Markdown）
+│   ├── chunks.json             # ingest 产物（勿手改）
+│   ├── embeddings.json         # embedding 向量缓存（勿手改）
+│   ├── eval_questions.json     # 16 题评测集
+│   └── react_traces.jsonl      # V3 ReAct trace 记录
 ├── src/
-│   ├── ingest.py          # 入库脚本
-│   ├── embedding.py       # text-embedding-v4 向量生成与检索
-│   ├── agent.py           # 关键词+Embedding+RRF混合检索 + LLM
-│   ├── api.py             # FastAPI 应用
-│   └── main.py            # uvicorn 启动入口
+│   ├── ingest.py               # V2 入库脚本
+│   ├── embedding.py            # V2 text-embedding-v4 向量生成与检索
+│   ├── agent.py                # V2 关键词+Embedding+RRF混合检索 + LLM
+│   ├── api.py                  # V2 FastAPI 应用
+│   ├── main.py                 # V2 uvicorn 启动入口
+│   └── agent_raw/              # V3 手写 ReAct Agent
+│       ├── react_loop.py       #   ReAct 主循环
+│       ├── tools.py            #   工具系统（Schema + Registry + 三层解析）
+│       ├── state.py            #   状态管理（StepRecord → AgentState → StateManager）
+│       ├── main.py             #   CLI 入口（单问题 + REPL）
+│       └── react_trace_viewer.py # Trace 可视化
 ├── scripts/
-│   ├── run_eval.py        # 关键词基线评测
-│   ├── run_embedding_eval.py # Embedding 基线评测
-│   ├── run_hybrid_eval.py # 混合检索评测
-│   └── eval_sanity_check.py # 评测集三项健全性检查
+│   ├── run_eval.py             # 关键词基线评测
+│   ├── run_embedding_eval.py   # Embedding 基线评测
+│   ├── run_hybrid_eval.py      # 混合检索评测
+│   └── eval_sanity_check.py    # 评测集三项健全性检查
 ├── tests/
+│   ├── test_agent.py           # V2 agent 测试
+│   ├── test_api.py             # V2 API 测试
+│   ├── test_agent_raw_tools.py # V3 工具系统测试
+│   └── test_s4_s5_state.py     # V3 状态管理 + 真实任务池测试
 ├── requirements.txt
 └── README.md
 ```
@@ -242,7 +303,7 @@ RenxinOS/
 |------|------|----------|
 | **V1** | 2026-06-17 | jieba 关键词检索 + `/chat` + timings |
 | **V2** | 2026-06-21 | + text-embedding-v4 · RRF 混合检索 · 16 题评测集 · Recall@8=84.4% |
-| 🔄 **V3** | 进行中 | 手写 ReAct Agent Loop · tool schema · function calling · react trace viewer |
+| 🔄 **V3** | 进行中 | 手写 ReAct Agent Loop · Tool Schema + Registry · 三层降级解析 · State dict 对话管理 · 真实任务池解析 · CLI REPL · Trace Viewer · 49 tests ✅ |
 ---
 
 ## 学习笔记（docs/learning/）
