@@ -346,15 +346,139 @@ def _mock_search_notes(query: str) -> str:
 
 def _mock_search_tasks(query: str) -> str:
     """
-    模拟查任务池工具（S1 占位）。
+    模拟查任务池工具（S1 占位，已废弃）。
 
-    S4 会替换为读取 tasks/全局任务池.md 的真实逻辑。
+    S4 已替换为 _real_search_tasks()，此函数保留作为 fallback。
     """
     return (
         f"【模拟任务池结果】查询词：{query}\n"
         "- 今日主块：V3 S2 function calling\n"
         "- 今日副块：read30《原则》第 4 章"
     )
+
+
+def _real_search_tasks(query: str) -> str:
+    """
+    真实的查任务池工具（S4 实现）。
+
+    从 tasks/全局任务池.md 中解析「📍 一眼行动」和「☀️ 今日执行」两节，
+    提取今日任务、主块、副块、deadline 等关键信息。
+
+    参数：
+        query: 检索查询词（如「今天主块」「deadline」「紧急任务」）
+
+    返回：
+        格式化的任务信息文本，供 LLM 阅读
+
+    设计决策：
+    - 不使用第三方 Markdown 解析库（V3 手写理解原理）
+    - 用正则解析固定结构（一眼行动表格 + Day Planner 清单）
+    - 任务池路径通过环境变量 TODO_DIR 注入，默认相对于 RenxinOS 项目根
+
+    类比 Java：
+    - 类似用 Scanner/BufferedReader 手动解析配置文件
+    - 而非用 Spring 的 @ConfigurationProperties 自动绑定
+    """
+    import os as _os
+    from pathlib import Path
+
+    # 任务池路径：默认 ../todo/tasks/全局任务池.md（相对于 RenxinOS 根）
+    todo_dir = _os.getenv("TODO_DIR", "")
+    if todo_dir:
+        tasks_pool_path = Path(todo_dir) / "tasks" / "全局任务池.md"
+    else:
+        # 从 RenxinOS 项目根向上找 todo 目录
+        renxinos_root = Path(__file__).resolve().parents[2]
+        tasks_pool_path = renxinos_root.parent / "todo" / "tasks" / "全局任务池.md"
+
+    if not tasks_pool_path.exists():
+        return (
+            f"错误：任务池文件不存在（{tasks_pool_path}）。"
+            f"请检查 TODO_DIR 环境变量或目录结构。"
+        )
+
+    raw = tasks_pool_path.read_text(encoding="utf-8")
+
+    # --- 解析「📍 一眼行动」节 ---
+    # 结构：表格，每行格式为 | **标签** | 内容 |
+    overview: dict[str, str] = {}
+    overview_match = re.search(
+        r"## 📍 一眼行动\s*\n(.*?)(?=\n## |\n---\n## )",
+        raw, re.DOTALL
+    )
+    if overview_match:
+        overview_section = overview_match.group(1)
+        # 匹配表格行：| **key**（可选后缀）| value |
+        for line in overview_section.split("\n"):
+            # 提取第一列中的加粗文本作为 key（忽略括号后缀如「主块**（13:30–17:30）」）
+            kv_match = re.match(
+                r"\|\s*\*{0,2}([^*|\n]+?)\*{0,2}(?:（[^）]*）)?\s*\|\s*(.+?)\s*\|",
+                line
+            )
+            if kv_match:
+                key = kv_match.group(1).strip()
+                value = kv_match.group(2).strip()
+                if key and value and not key.startswith("-"):
+                    overview[key] = value
+
+    # --- 解析「☀️ 今日执行」节 ---
+    # 提取日期、本周摘要、Day Planner 中未完成的 checkbox
+    today_section_match = re.search(
+        r"## ☀️ 今日执行\s*\n(.*?)(?=\n## |\n---\n## |$)",
+        raw, re.DOTALL
+    )
+    today_date = ""
+    week_summary = ""
+    pending_tasks: list[str] = []
+    if today_section_match:
+        today_section = today_section_match.group(1)
+        # 提取日期
+        date_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", today_section)
+        if date_match:
+            today_date = date_match.group(1)
+        # 提取本周摘要
+        week_match = re.search(r"\*\*本周\*\*[：:]\s*(.+?)(?:\n|$)", today_section)
+        if week_match:
+            week_summary = week_match.group(1).strip()
+        # 提取未完成的任务（- [ ] 开头的行），过滤习惯打卡和备选区域
+        in_skip_section = False
+        for line in today_section.split("\n"):
+            stripped = line.strip()
+            # 检测需要跳过的区域
+            if stripped.startswith("### 习惯打卡") or stripped.startswith("### 备选任务"):
+                in_skip_section = True
+                continue
+            if stripped.startswith("### ") and in_skip_section:
+                in_skip_section = False
+            if in_skip_section:
+                continue
+            if stripped.startswith("- [ ]"):
+                task = stripped[6:].strip()
+                if task:
+                    pending_tasks.append(task)
+
+    # --- 拼接结果 ---
+    parts: list[str] = []
+    parts.append(f"## 今日任务概览（{today_date or '未知日期'}）")
+    parts.append("")
+
+    if week_summary:
+        parts.append(f"**本周**：{week_summary}")
+        parts.append("")
+
+    # 一眼行动关键字段
+    key_fields = ["主块", "副块", "最急 deadline"]
+    for key in key_fields:
+        if key in overview:
+            parts.append(f"- **{key}**：{overview[key]}")
+
+    if pending_tasks:
+        parts.append("")
+        parts.append("### 待完成任务（Day Planner 未勾选）")
+        for task in pending_tasks:
+            parts.append(f"- [ ] {task}")
+
+    return "\n".join(parts)
 
 
 def create_default_registry() -> ToolRegistry:
@@ -463,7 +587,14 @@ def create_registry_with_retriever() -> ToolRegistry:
         fn=_real_search_notes,
     ))
 
-    # --- search_tasks：仍为 mock ---
+    # --- search_tasks：真实任务池（S4 替换）---
+    # 优先使用真实实现，fallback 到 mock
+    try:
+        _real_search_tasks("")  # 预热检查，确认文件可读
+        _search_tasks_fn = _real_search_tasks
+    except Exception:
+        _search_tasks_fn = _mock_search_tasks
+
     registry.register(ToolDef(
         name="search_tasks",
         description="在个人任务池中检索今日任务与关键 deadline。当你需要查看今天要做什么、有哪些待办事项时使用此工具。",
@@ -475,7 +606,7 @@ def create_registry_with_retriever() -> ToolRegistry:
                 required=True,
             ),
         ],
-        fn=_mock_search_tasks,
+        fn=_search_tasks_fn,
     ))
 
     return registry

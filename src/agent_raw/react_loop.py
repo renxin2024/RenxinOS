@@ -54,6 +54,12 @@ from src.agent_raw.tools import (
     create_registry_with_retriever,# 真实检索注册（S3 使用）
 )
 
+# S5：State dict + 对话历史管理
+from src.agent_raw.state import (
+    StepRecord,     # 单步操作的不可变记录
+    StateManager,   # 状态管理器（管理对话生命周期）
+)
+
 
 # =====================================================================
 # 2. ReAct prompt 模板
@@ -179,6 +185,7 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
         question: 用户问题
         max_steps: 最大迭代步数（防止无限循环）
         verbose: 是否打印每步思考过程
+        registry: 工具注册表（None 则使用默认注册表）
 
     返回：
         最终答案字符串
@@ -186,13 +193,20 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
     副作用：
         每次调用会将完整 trace（prompt / raw_output / observation）
         追加写入 data/react_traces.jsonl，供 react_trace_viewer 展示。
+
+    V3 S5 改进：使用 StateManager 替代字符串 scratchpad。
+    - 旧方式：scratchpad = "" → scratchpad += "Thought: ...\n"
+    - 新方式：StateManager.record(StepRecord(...)) → manager.scratchpad()
+    - 好处：结构化存储、可查询历史、支持截断、为 V4 LangGraph 迁移铺垫
     """
     # 如果没有传入 registry，默认使用带真实检索的注册表
-    # 类比 Java：类似 Optional.ofNullable(registry).orElseGet(() -> createRegistry())
     if registry is None:
         registry = create_registry_with_retriever()
 
-    scratchpad = ""  # 记录 Thought/Action/Observation 历史，类似草稿本
+    # S5：使用 StateManager 管理对话历史（替代旧 scratchpad 字符串）
+    manager = StateManager()
+    state = manager.start(question=question, model=DEFAULT_MODEL, max_steps=max_steps)
+
     # trace 记录：每个 step 的完整 LLM 交互
     trace_steps = []
     trace_id = _json.loads(f'{{"t": {int(__import__("time").time())}}}')["t"]
@@ -201,13 +215,12 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
         console.print(Panel(f"[bold]{question}[/bold]", title="[bold blue]🤖 ReAct Agent Start[/bold blue]", subtitle=f"model={DEFAULT_MODEL}, max_steps={max_steps}", border_style="blue"))
 
     for step in range(1, max_steps + 1):
+        scratchpad = manager.scratchpad()
         prompt = build_react_prompt(question, scratchpad, registry)
         response = client.chat.completions.create(
             model=DEFAULT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            # stop 序列：模型生成到 "Observation:" 时立即截断，
-            # 防止模型自己编造工具返回结果（文本 ReAct 的经典问题）
             stop=["Observation:"],
         )
         raw_output = response.choices[0].message.content or ""
@@ -236,6 +249,12 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
 
         # 终止条件 1：模型主动给出 Final Answer
         if parsed.final_answer is not None:
+            manager.record(StepRecord(
+                step=step,
+                thought=parsed.thought,
+                final_answer=parsed.final_answer,
+                raw_output=raw_output,
+            ))
             trace_steps.append(step_trace)
             _save_trace(trace_id, question, trace_steps, parsed.final_answer)
             return parsed.final_answer
@@ -244,18 +263,20 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
         if parsed.action is None:
             step_trace["observation"] = "（未检测到 Action，返回 thought）"
             trace_steps.append(step_trace)
+            manager.record(StepRecord(
+                step=step,
+                thought=parsed.thought,
+                raw_output=raw_output,
+            ))
             _save_trace(trace_id, question, trace_steps, parsed.thought)
             if verbose:
                 print("未检测到 Action，返回当前思考内容。")
             return parsed.thought
 
-        # 执行 tool：使用 ToolRegistry.execute() 替代直接调用
-        # 同时支持 parse_tool_call 的结构化解析（S2 新增）
+        # 执行 tool
         tool_call = parse_tool_call(raw_output)
         if tool_call and tool_call.tool_name:
-            # 结构化解析成功，用 arguments dict 调用
             observation = registry.execute(tool_call.tool_name, **tool_call.arguments)
-            # 同步 parsed.action 供 scratchpad 和 verbose 使用
             if parsed.action is None:
                 parsed = ParseResult(
                     thought=parsed.thought,
@@ -263,10 +284,9 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
                     action_input=str(tool_call.arguments),
                 )
         elif parsed.action:
-            # 文本 ReAct 格式（S1 兼容），用 action + action_input 调用
             observation = registry.execute(parsed.action, query=parsed.action_input or "")
         else:
-            observation = "错误：无法解析出工具调用。" 
+            observation = "错误：无法解析出工具调用。"
 
         step_trace["observation"] = observation
         trace_steps.append(step_trace)
@@ -274,19 +294,21 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
         if verbose:
             console.print(Panel(observation, title=f"[bold]📤 Observation ({parsed.action})[/bold]", border_style="green"))
 
-        # 把本步结果追加到 scratchpad，供下一轮 LLM 看到完整上下文
-        scratchpad += (
-            f"Thought: {parsed.thought}\n"
-            f"Action: {parsed.action}\n"
-            f"Action Input: {parsed.action_input or ''}\n"
-            f"Observation: {observation}\n"
-        )
+        # S5：使用 StepRecord 记录本步（替代旧 scratchpad += 字符串拼接）
+        manager.record(StepRecord(
+            step=step,
+            thought=parsed.thought,
+            action=parsed.action,
+            action_input=parsed.action_input or "",
+            observation=observation,
+            raw_output=raw_output,
+        ))
 
-    # 终止条件 3：超过最大步数，返回最后思考内容
+    # 终止条件 3：超过最大步数
     if verbose:
         console.print(f"\n[bold red]⚠ 达到最大步数 {max_steps}[/bold red]，返回最后思考内容。")
-    _save_trace(trace_id, question, trace_steps, parsed.thought)
-    return parsed.thought
+    _save_trace(trace_id, question, trace_steps, state.last_answer)
+    return state.last_answer
 
 
 def _save_trace(trace_id: int, question: str, steps: list, final_answer: str):
@@ -304,12 +326,14 @@ def _save_trace(trace_id: int, question: str, steps: list, final_answer: str):
 
 
 # =====================================================================
-# 5. S1 最小可运行示例
+# 5. 快速测试入口（S6 后推荐使用 main.py CLI）
 # =====================================================================
 if __name__ == "__main__":
-    # S2+S3：使用真实检索注册表（search_notes 接 V2 retrieve_hybrid）
-    # 测试 mock 可改用 create_default_registry()
+    # 快速测试：直接运行此文件可验证 react_loop 是否正常
+    # 完整 CLI 请使用：python -m src.agent_raw.main
+    from src.agent_raw.tools import create_default_registry
+
     test_question = "GTD 任务 checkbox 可以写在哪里？今天主块是什么？"
     print(f"问题：{test_question}\n")
-    answer = run_react(test_question, max_steps=3, verbose=True)
+    answer = run_react(test_question, max_steps=3, verbose=True, registry=create_default_registry())
     print(f"\n最终答案：\n{answer}")
