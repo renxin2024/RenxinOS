@@ -12,6 +12,7 @@ Renxin OS — V3 S1 ReAct loop 骨架
 
 import os
 import re
+import time as _time
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -20,6 +21,8 @@ import json as _json
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+from rich.table import Table
+from rich import box
 
 console = Console()
 
@@ -90,6 +93,9 @@ def build_react_prompt(question: str, scratchpad: str, registry: ToolRegistry) -
 - 你必须先调用工具获取信息，禁止在第一轮直接给出 Final Answer
 - 只有在获得 Observation 之后，才可以给出 Final Answer
 - 禁止仅凭自身知识回答，所有回答必须基于工具检索到的内容
+- 如果 Observation 已包含足够回答问题的信息，请立即给出 Final Answer，不要继续调用工具
+- 如果问题包含多个子问题，尽量在同一轮用一个综合查询获取所有需要的信息
+- 如果前一步搜索未命中，最多再尝试 1 次换词搜索，仍无结果则基于已有信息回答
 
 请严格使用以下格式（每一步只输出 Thought + Action + Action Input，或最终答案）：
 
@@ -174,6 +180,133 @@ def _extract_thought(text: str) -> str:
     return text.strip()
 
 
+def _build_fallback_answer(thought: str, manager) -> str:
+    """
+    兜底答案生成：当模型未产出有效 thought/final_answer 时，
+    从已执行的检索步骤中提取 observation 内容，拼接为答案。
+
+    触发场景（S7 修复 #2 空答案问题）：
+    - 模型返回空响应（API 异常、格式错误）
+    - 模型只输出了 thought 但未给出 Action 或 Final Answer
+    - thought 为空但前面步骤已有检索结果
+
+    策略：
+    1. 如果 thought 非空 → 直接返回 thought（原有行为）
+    2. 如果 thought 为空但有历史 observation → 提取前一步 observation 的前 500 字
+    3. 如果都没有 → 返回通用兜底消息
+
+    类比 Java：类似 try-catch 中的 fallback 逻辑，保证用户体验不中断
+    """
+    if thought and thought.strip():
+        return thought.strip()
+
+    # 从已执行的步骤中提取最后一条 observation
+    steps = manager.state.steps if manager.state else []
+    for s in reversed(steps):
+        if s.observation and s.observation.strip():
+            obs = s.observation.strip()
+            # 截取前 500 字，避免 observation 过长
+            snippet = obs[:500]
+            return (
+                f"抱歉，模型在处理时未生成完整回答。以下是从检索结果中自动提取的相关信息：\n\n"
+                f"{snippet}"
+                f"{'...' if len(obs) > 500 else ''}\n\n"
+                f"（这是自动生成的兜底答案，请查看上方 Observation 获取完整检索结果。）"
+            )
+
+    return "抱歉，模型未能生成有效回答，且没有可用的检索结果。请重试或简化问题。"
+
+
+# =====================================================================
+# 3.5 步骤日志（S7 新增 — 统一格式化每步 Thought/Action/Observation）
+# =====================================================================
+def log_step_header(step: int, total: int, elapsed_ms: float | None = None) -> None:
+    """
+    打印步骤头部（Step N/M + 累计耗时）。
+
+    设计意图：
+    - 用分隔线清晰区分每一步，避免 Thought/Action/Observation 混在一起
+    - 时间戳让用户感知 LLM 调用的延迟（这是 Agent 的主要性能瓶颈）
+    - 类比 Java：类似 log.info("=== Step {} / {} ===", step, maxSteps)
+    """
+    time_str = f" | ⏱ 累计 {elapsed_ms/1000:.1f}s" if elapsed_ms else ""
+    console.rule(f"[bold cyan]Step {step}/{total}{time_str}[/bold cyan]")
+
+
+def log_thought(thought: str) -> None:
+    """
+    打印模型的思考过程。
+
+    设计意图：
+    - 黄色边框 = "思考阶段"（模型在推理，还没动手）
+    - Panel 包裹让长文本不被终端截断破坏可读性
+    - 类比：Java 中这是 log.debug("Agent thought: {}") 的 rich 可视化版本
+    """
+    console.print(Panel(
+        thought,
+        title="[bold yellow]💭 Thought[/bold yellow]",
+        title_align="left",
+        border_style="yellow",
+    ))
+
+
+def log_action(action: str, action_input: str) -> None:
+    """
+    打印工具调用决策。
+
+    设计意图：
+    - 橙色 = "执行阶段"（模型决定调用工具了）
+    - Action 和 Action Input 分行，方便复制调试
+    - 类比：Java 中这是 log.info("Calling tool: {} with args: {}")
+    """
+    console.print(f"[bold orange1]🔧 Action:[/bold orange1] {action}")
+    if action_input:
+        console.print(f"[dim]   📥 Input: {action_input}[/dim]")
+
+
+def log_observation(observation: str, tool_name: str, tool_elapsed_ms: float) -> None:
+    """
+    打印工具返回的观察结果。
+
+    设计意图：
+    - 绿色边框 = "观察阶段"（模型收到了外部反馈）
+    - 显示工具耗时，帮助发现慢工具（如检索耗时过长）
+    - 类比：Java 中这是 log.info("Tool {} returned in {}ms: {}")
+    """
+    console.print(Panel(
+        observation,
+        title=f"[bold green]📤 Observation ({tool_name}) ⏱ {tool_elapsed_ms:.0f}ms[/bold green]",
+        title_align="left",
+        border_style="green",
+    ))
+
+
+def log_final_answer(answer: str, total_steps: int, total_elapsed_ms: float) -> None:
+    """
+    打印最终答案与汇总统计。
+
+    设计意图：
+    - 绿色 Panel + 统计信息（步数、总耗时）——让用户一眼看到 Agent 完成了什么
+    - 类比：Java 中这是最终 log.info("Task completed in {} steps, {}ms") + 输出结果
+    """
+    console.print(Panel(
+        answer,
+        title=f"[bold green]✅ Final Answer[/bold green]",
+        title_align="left",
+        border_style="green",
+    ))
+    console.print(
+        f"[dim]📊 统计：{total_steps} 步 | ⏱ 总耗时 {total_elapsed_ms/1000:.1f}s "
+        f"| 平均 {total_elapsed_ms/total_steps/1000:.1f}s/步[/dim]"
+    )
+
+
+def log_max_steps_warning(max_steps: int, last_thought: str) -> None:
+    """打印超步数警告。"""
+    console.rule("[bold red]⚠ 达到最大步数限制[/bold red]")
+    console.print(f"[yellow]最后思考内容：[/yellow]{last_thought[:200]}")
+
+
 # =====================================================================
 # 4. ReAct 主循环
 # =====================================================================
@@ -211,31 +344,50 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
     trace_steps = []
     trace_id = _json.loads(f'{{"t": {int(__import__("time").time())}}}')["t"]
 
+    # S7：总计时器（从 Agent 启动到结束的墙钟时间）
+    t_start = _time.perf_counter()
+
     if verbose:
-        console.print(Panel(f"[bold]{question}[/bold]", title="[bold blue]🤖 ReAct Agent Start[/bold blue]", subtitle=f"model={DEFAULT_MODEL}, max_steps={max_steps}", border_style="blue"))
+        console.print(Panel(
+            f"[bold]{question}[/bold]",
+            title="[bold blue]🤖 ReAct Agent Start[/bold blue]",
+            subtitle=f"model={DEFAULT_MODEL}, max_steps={max_steps}",
+            border_style="blue",
+        ))
 
     for step in range(1, max_steps + 1):
         scratchpad = manager.scratchpad()
         prompt = build_react_prompt(question, scratchpad, registry)
+
+        # S7：记录 LLM 调用耗时
+        t_llm_start = _time.perf_counter()
         response = client.chat.completions.create(
             model=DEFAULT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             stop=["Observation:"],
         )
+        llm_elapsed_ms = (_time.perf_counter() - t_llm_start) * 1000
+        elapsed_total = (_time.perf_counter() - t_start) * 1000
+
         raw_output = response.choices[0].message.content or ""
         parsed = parse_llm_output(raw_output)
 
+        # S7：使用统一日志函数替代零散 console.print
         if verbose:
-            console.print(f"\n[bold cyan]═══ Step {step} ═══[/bold cyan]")
-            console.print(Panel(parsed.thought, title="[bold]💭 Thought[/bold]", border_style="yellow"))
-            if parsed.action:
-                console.print(f"[bold]🔧 Action:[/bold] [orange1]{parsed.action}[/orange1]")
-                console.print(f"[bold]📥 Action Input:[/bold] {parsed.action_input or '(empty)'}")
-            if parsed.final_answer:
-                console.print(Panel(parsed.final_answer, title="[bold green]✅ Final Answer[/bold green]", border_style="green"))
+            log_step_header(step, max_steps, elapsed_total)
+            log_thought(parsed.thought)
 
-        # 收集本步 trace
+            if parsed.action:
+                log_action(parsed.action, parsed.action_input or "")
+            if parsed.final_answer:
+                log_final_answer(
+                    parsed.final_answer,
+                    total_steps=step,
+                    total_elapsed_ms=elapsed_total,
+                )
+
+        # 收集本步 trace（S7：新增时间戳字段 llm_ms / tool_ms / total_ms）
         step_trace = {
             "step": step,
             "prompt": prompt,
@@ -245,6 +397,10 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
             "action_input": parsed.action_input,
             "final_answer": parsed.final_answer,
             "observation": None,
+            # S7 计时字段：让 HTML 查看器能展示每步性能
+            "llm_ms": round(llm_elapsed_ms, 1),
+            "tool_ms": None,
+            "total_ms": round(elapsed_total, 1),
         }
 
         # 终止条件 1：模型主动给出 Final Answer
@@ -256,24 +412,34 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
                 raw_output=raw_output,
             ))
             trace_steps.append(step_trace)
-            _save_trace(trace_id, question, trace_steps, parsed.final_answer)
+            _save_trace(trace_id, question, trace_steps, parsed.final_answer,
+                        total_ms=(_time.perf_counter() - t_start) * 1000)
             return parsed.final_answer
 
         # 终止条件 2：模型没产生可执行动作，把 thought 当答案返回
         if parsed.action is None:
-            step_trace["observation"] = "（未检测到 Action，返回 thought）"
+            # S7 兜底增强：如果 thought 为空但已有检索结果，
+            # 自动从 observation 提取关键内容拼接为答案，避免返回空字符串。
+            fallback_answer = _build_fallback_answer(parsed.thought, manager)
+            step_trace["observation"] = "（未检测到 Action，自动拼接待检内容为答案）"
             trace_steps.append(step_trace)
             manager.record(StepRecord(
                 step=step,
                 thought=parsed.thought,
+                final_answer=fallback_answer,
                 raw_output=raw_output,
             ))
-            _save_trace(trace_id, question, trace_steps, parsed.thought)
+            _save_trace(trace_id, question, trace_steps, fallback_answer,
+                        total_ms=(_time.perf_counter() - t_start) * 1000)
             if verbose:
-                print("未检测到 Action，返回当前思考内容。")
-            return parsed.thought
+                if parsed.thought:
+                    print("未检测到 Action，返回当前思考内容。")
+                else:
+                    console.print("[yellow]⚠ 模型未产出有效内容，已从检索结果中自动拼接答案。[/yellow]")
+            return fallback_answer
 
-        # 执行 tool
+        # 执行 tool（S7：记录工具执行耗时）
+        t_tool_start = _time.perf_counter()
         tool_call = parse_tool_call(raw_output)
         if tool_call and tool_call.tool_name:
             observation = registry.execute(tool_call.tool_name, **tool_call.arguments)
@@ -287,12 +453,15 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
             observation = registry.execute(parsed.action, query=parsed.action_input or "")
         else:
             observation = "错误：无法解析出工具调用。"
+        tool_elapsed_ms = (_time.perf_counter() - t_tool_start) * 1000
 
         step_trace["observation"] = observation
+        step_trace["tool_ms"] = round(tool_elapsed_ms, 1)
+        step_trace["total_ms"] = round((_time.perf_counter() - t_start) * 1000, 1)
         trace_steps.append(step_trace)
 
         if verbose:
-            console.print(Panel(observation, title=f"[bold]📤 Observation ({parsed.action})[/bold]", border_style="green"))
+            log_observation(observation, parsed.action or "unknown", tool_elapsed_ms)
 
         # S5：使用 StepRecord 记录本步（替代旧 scratchpad += 字符串拼接）
         manager.record(StepRecord(
@@ -306,19 +475,28 @@ def run_react(question: str, max_steps: int = 5, verbose: bool = True, registry:
 
     # 终止条件 3：超过最大步数
     if verbose:
-        console.print(f"\n[bold red]⚠ 达到最大步数 {max_steps}[/bold red]，返回最后思考内容。")
-    _save_trace(trace_id, question, trace_steps, state.last_answer)
+        log_max_steps_warning(max_steps, state.last_answer)
+    _save_trace(trace_id, question, trace_steps, state.last_answer,
+                total_ms=(_time.perf_counter() - t_start) * 1000)
     return state.last_answer
 
 
-def _save_trace(trace_id: int, question: str, steps: list, final_answer: str):
-    """将本次 run_react 的完整 trace 追加写入 JSONL。"""
+def _save_trace(trace_id: int, question: str, steps: list, final_answer: str, total_ms: float = 0):
+    """将本次 run_react 的完整 trace 追加写入 JSONL。
+
+    S7 新增：记录启动时间戳、总耗时、每步 LLM/工具耗时，
+    供 HTML 查看器展示性能摘要。
+    """
     record = {
         "trace_id": trace_id,
         "question": question,
         "model": DEFAULT_MODEL,
         "steps": steps,
         "final_answer": final_answer,
+        # S7：全局计时与元信息
+        "started_at": _time.strftime("%Y-%m-%d %H:%M:%S"),
+        "total_ms": round(total_ms, 1),
+        "total_steps": len(steps),
     }
     with open(TRACE_PATH, "a", encoding="utf-8") as f:
         f.write(_json.dumps(record, ensure_ascii=False) + "\n")

@@ -4,7 +4,7 @@ Java → Agent Developer 求职作品集，聚焦「RAG 检索质量 + 手写 Ag
 
 **V2 能力**：笔记入库 · jieba 关键词检索 · text-embedding-v4 语义检索 · RRF 混合检索 · 16 题评测集 + Recall@k · `POST /chat` 返回答案、来源与分阶段耗时 · [Scalar](http://127.0.0.1:8000/scalar) 交互式 API 文档。
 
-**V3 能力**：手写 ReAct Agent Loop · function calling（Tool Schema + Registry + 三层降级解析）· State dict 对话历史管理 · 真实任务池解析 · CLI REPL · Trace Viewer · 测试 49 个全绿。
+**V3 能力**：手写 ReAct Agent Loop · function calling（Tool Schema + Registry + 三层降级解析）· State dict 对话历史管理 · 真实任务池解析 · CLI REPL · Rich 步骤日志（每步带颜色+时间戳）· Trace Viewer（性能摘要+时间线）· 测试 49 个全绿。
 
 ---
 
@@ -303,7 +303,7 @@ RenxinOS/
 |------|------|----------|
 | **V1** | 2026-06-17 | jieba 关键词检索 + `/chat` + timings |
 | **V2** | 2026-06-21 | + text-embedding-v4 · RRF 混合检索 · 16 题评测集 · Recall@8=84.4% |
-| 🔄 **V3** | 进行中 | 手写 ReAct Agent Loop · Tool Schema + Registry · 三层降级解析 · State dict 对话管理 · 真实任务池解析 · CLI REPL · Trace Viewer · 49 tests ✅ |
+| ✅ **V3** | 2026-06-25 | 手写 ReAct Agent Loop · Tool Schema + Registry · 三层降级解析 · State dict 对话管理 · 真实任务池解析 · CLI REPL · Rich 步骤日志 · Trace Viewer · 49 tests ✅ |
 ---
 
 ## 学习笔记（docs/learning/）

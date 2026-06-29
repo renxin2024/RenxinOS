@@ -47,6 +47,9 @@ htmlcov/
 # macOS
 .DS_Store
 
+# CodeBuddy automations
+.codebuddy/
+
 # IDEs
 .idea/
 .vscode/
